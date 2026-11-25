@@ -9,9 +9,7 @@ st.set_page_config(
 st.title("🤖 IntelliAssist AI")
 st.subheader("Smart Document AI Assistant")
 
-st.write(
-    "Upload your documents and interact with AI."
-)
+st.write("Upload your documents and interact with AI.")
 
 st.sidebar.title("Navigation")
 
