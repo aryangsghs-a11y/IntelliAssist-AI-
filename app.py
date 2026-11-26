@@ -6,15 +6,35 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🤖 IntelliAssist AI")
-st.subheader("Smart Document AI Assistant")
+st.markdown("""
+<style>
+.stApp {
+    background-color: #f5f7fb;
+}
+.main-title {
+    font-size: 36px;
+    font-weight: 800;
+    color: #172554;
+}
+.subtitle {
+    color: #64748b;
+    font-size: 16px;
+}
+.feature-card {
+    background: white;
+    padding: 22px;
+    border-radius: 14px;
+    border: 1px solid #e2e8f0;
+    min-height: 135px;
+}
+</style>
+""", unsafe_allow_html=True)
 
-st.write("Upload your documents and interact with AI.")
-
-st.sidebar.title("Navigation")
+st.sidebar.title("🤖 IntelliAssist AI")
+st.sidebar.caption("Smart Document AI Assistant")
 
 page = st.sidebar.radio(
-    "Select Feature",
+    "NAVIGATION",
     [
         "Dashboard",
         "Ask Questions",
@@ -26,35 +46,93 @@ page = st.sidebar.radio(
     ]
 )
 
-st.header("📄 Upload Document")
-
-file = st.file_uploader(
-    "Upload PDF, TXT or DOCX",
-    type=["pdf", "txt", "docx"]
+st.markdown(
+    '<div class="main-title">IntelliAssist AI</div>',
+    unsafe_allow_html=True
+)
+st.markdown(
+    '<div class="subtitle">Your smart document assistant</div>',
+    unsafe_allow_html=True
 )
 
-if file:
-    st.success(f"{file.name} uploaded successfully!")
+st.divider()
 
 if page == "Dashboard":
-    st.write("Welcome to IntelliAssist AI!")
+
+    st.subheader("Welcome to your Dashboard 👋")
+    st.write("Manage your documents and AI tools in one place.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("""
+        <div class="feature-card">
+        <h3>📄 Upload Documents</h3>
+        <p>Upload PDF, TXT and DOCX files.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        st.markdown("""
+        <div class="feature-card">
+        <h3>💬 Ask Questions</h3>
+        <p>Interact with your documents.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    col3, col4 = st.columns(2)
+
+    with col3:
+        st.markdown("""
+        <div class="feature-card">
+        <h3>🔍 Semantic Search</h3>
+        <p>Find relevant document information.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col4:
+        st.markdown("""
+        <div class="feature-card">
+        <h3>📝 Summarization</h3>
+        <p>Get short document summaries.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.subheader("Upload Your Document")
+
+    file = st.file_uploader(
+        "Choose a PDF, TXT or DOCX file",
+        type=["pdf", "txt", "docx"]
+    )
+
+    if file:
+        st.success(f"{file.name} uploaded successfully!")
 
 elif page == "Ask Questions":
-    question = st.text_input("Ask a question")
+    st.subheader("💬 Ask Questions")
+    st.text_input("Enter your question")
     st.button("Get Answer")
 
 elif page == "Semantic Search":
-    search = st.text_input("Search your document")
+    st.subheader("🔍 Semantic Search")
+    st.text_input("Search your document")
     st.button("Search")
 
 elif page == "Summarization":
+    st.subheader("📝 Document Summarization")
     st.button("Summarize Document")
 
 elif page == "Sentiment Analysis":
+    st.subheader("😊 Sentiment Analysis")
     st.button("Analyze Sentiment")
 
 elif page == "Intent Analysis":
+    st.subheader("🎯 Intent Analysis")
     st.button("Analyze Intent")
 
 elif page == "Chat History":
-    st.write("Your conversation history will appear here.")
+    st.subheader("🕘 Chat History")
+    st.info("Your conversation history will appear here.")
+
+st.divider()
+st.caption("IntelliAssist AI | Smart Document AI Assistant")
