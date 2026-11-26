@@ -258,3 +258,61 @@ if st.button("Analyze Intent"):
                     st.write("•", sentence)
             else:
                 st.info("No relevant information found in document.")
+                st.divider()
+st.header("💬 Chat History")
+
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+chat_question = st.text_input(
+    "Ask a question for chat history",
+    key="history_question"
+)
+
+if st.button("Ask and Save"):
+
+    if file is None or not text.strip():
+        st.warning("Please upload a document first.")
+
+    elif not chat_question.strip():
+        st.warning("Please enter a question.")
+
+    else:
+        sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
+
+        keywords = set(
+            re.findall(r'\b\w+\b', chat_question.lower())
+        )
+
+        matches = []
+
+        for sentence in sentences:
+            sentence_words = set(
+                re.findall(r'\b\w+\b', sentence.lower())
+            )
+            score = len(keywords & sentence_words)
+
+            if score > 0:
+                matches.append((score, sentence.strip()))
+
+        matches.sort(key=lambda item: item[0], reverse=True)
+
+        if matches:
+            answer = " ".join(
+                sentence for score, sentence in matches[:3]
+            )
+        else:
+            answer = "No matching information found."
+
+        st.session_state.chat_history.append({
+            "question": chat_question,
+            "answer": answer
+        })
+
+if st.session_state.chat_history:
+    st.subheader("📚 Previous Conversations")
+
+    for chat in reversed(st.session_state.chat_history):
+        st.write("You:", chat["question"])
+        st.write("Answer:", chat["answer"])
+        st.divider()
