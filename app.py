@@ -110,3 +110,44 @@ if file is not None and st.button("Summarize Document"):
         st.write(summary)
     else:
         st.warning("No readable text found.")
+st.divider()
+st.header("🔎 Smart Document Search")
+
+if file is not None and text.strip():
+
+    search_query = st.text_input(
+        "Search information in your document"
+    )
+
+    if st.button("Search Document"):
+
+        if not search_query.strip():
+            st.warning("Please enter something to search.")
+
+        else:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            from sklearn.metrics.pairwise import cosine_similarity
+
+            sentences = [
+                s.strip()
+                for s in re.split(r'(?<=[.!?])\s+|\n+', text)
+                if s.strip()
+            ]
+
+            if sentences:
+                vectorizer = TfidfVectorizer()
+                vectors = vectorizer.fit_transform(
+                    sentences + [search_query]
+                )
+
+                scores = cosine_similarity(
+                    vectors[-1], vectors[:-1]
+                ).flatten()
+
+                best_matches = scores.argsort()[::-1][:3]
+
+                st.subheader("📌 Search Results")
+
+                for index in best_matches:
+                    if scores[index] > 0:
+                        st.write("•", sentences[index])
