@@ -151,3 +151,38 @@ if file is not None and text.strip():
                 for index in best_matches:
                     if scores[index] > 0:
                         st.write("•", sentences[index])
+st.divider()
+st.header("😊 Sentiment Analysis")
+
+if file is not None and text.strip():
+
+    if st.button("Analyze Sentiment"):
+
+        positive_words = {
+            "good", "great", "happy", "excellent",
+            "love", "best", "wonderful", "success",
+            "beautiful", "positive"
+        }
+
+        negative_words = {
+            "bad", "sad", "poor", "hate",
+            "worst", "terrible", "failure",
+            "problem", "negative", "angry"
+        }
+
+        words = set(re.findall(r'\b\w+\b', text.lower()))
+
+        positive_count = len(words & positive_words)
+        negative_count = len(words & negative_words)
+
+        if positive_count > negative_count:
+            st.success("😊 Positive Sentiment")
+
+        elif negative_count > positive_count:
+            st.error("😟 Negative Sentiment")
+
+        else:
+            st.info("😐 Neutral Sentiment")
+
+        st.write("Positive words:", positive_count)
+        st.write("Negative words:", negative_count)
