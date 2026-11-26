@@ -225,3 +225,36 @@ if st.button("Analyze Intent"):
             intent = "General Request"
 
         st.success("Detected Intent: " + intent)
+        if file is not None and text.strip():
+            sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
+
+            stop_words = {
+                "please", "explain", "tell", "me",
+                "about", "what", "is", "the", "a",
+                "an", "of", "in", "to", "how"
+            }
+
+            keywords = set(
+                re.findall(r'\b\w+\b', user_intent.lower())
+            ) - stop_words
+
+            matches = []
+
+            for sentence in sentences:
+                sentence_words = set(
+                    re.findall(r'\b\w+\b', sentence.lower())
+                )
+                score = len(keywords & sentence_words)
+
+                if score > 0:
+                    matches.append((score, sentence.strip()))
+
+            matches.sort(key=lambda item: item[0], reverse=True)
+
+            if matches:
+                st.subheader("📖 Answer from Your Document")
+
+                for score, sentence in matches[:5]:
+                    st.write("•", sentence)
+            else:
+                st.info("No relevant information found in document.")
