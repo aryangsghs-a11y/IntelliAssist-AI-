@@ -1,8 +1,8 @@
 import streamlit as st
 from pypdf import PdfReader
 from docx import Document
+from io import BytesIO
 import re
-from collections import Counter
 
 st.set_page_config(
     page_title="IntelliAssist AI",
@@ -13,12 +13,6 @@ st.set_page_config(
 st.title("🤖 IntelliAssist AI")
 st.write("Smart Document AI Assistant")
 
-if "document_text" not in st.session_state:
-    st.session_state.document_text = ""
-
-if "summary" not in st.session_state:
-    st.session_state.summary = ""
-
 st.header("📄 Upload Your Document")
 
 file = st.file_uploader(
@@ -27,96 +21,80 @@ file = st.file_uploader(
 )
 
 if file is not None:
+
     text = ""
 
     if file.name.endswith(".pdf"):
-        pdf = PdfReader(file)
+        pdf = PdfReader(BytesIO(file.getvalue()))
         for page in pdf.pages:
             text += page.extract_text() or ""
 
     elif file.name.endswith(".txt"):
-        text = file.getvalue().decode("utf-8")
+        text = file.getvalue().decode("utf-8", errors="replace")
 
     elif file.name.endswith(".docx"):
-        doc = Document(file)
+        doc = Document(BytesIO(file.getvalue()))
         for paragraph in doc.paragraphs:
             text += paragraph.text + "\n"
 
-    st.session_state.document_text = text
-    st.session_state.summary = ""
-
     st.success("Document uploaded successfully!")
 
-if st.session_state.document_text:
     st.subheader("📖 Extracted Text")
+    st.text_area("Document Text", text, height=250)
 
-    st.text_area(
-        "Your document text",
-        st.session_state.document_text,
-        height=200
-    )
-
-    st.write(
-        "Total characters:",
-        len(st.session_state.document_text)
-    )
+    st.write("Total characters:", len(text))
 
     st.divider()
-    st.header("📝 Document Summarization")
 
-    if st.button("Generate Summary"):
-        text = st.session_state.document_text
+    st.header("💬 Ask Questions")
 
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 15]
+    question = st.text_input(
+        "Ask something about your document"
+    )
 
-        stop_words = {
-            "the", "is", "are", "a", "an", "and", "or",
-            "of", "to", "in", "for", "with", "on", "by",
-            "this", "that", "it", "as", "be", "was", "were"
-        }
+    if st.button("Get Answer"):
 
-        words = re.findall(r'\b[a-zA-Z]+\b', text.lower())
-        words = [w for w in words if w not in stop_words]
+        if not text.strip():
+            st.warning("No readable text found in document.")
 
-        frequencies = Counter(words)
+        elif not question.strip():
+            st.warning("Please enter a question.")
 
-        scored = []
-
-        for index, sentence in enumerate(sentences):
-            sentence_words = re.findall(
-                r'\b[a-zA-Z]+\b',
-                sentence.lower()
-            )
-
-            score = sum(
-                frequencies[word]
-                for word in sentence_words
-            )
-
-            scored.append((score, index, sentence))
-
-        count = min(5, len(scored))
-
-        best = sorted(
-            sorted(scored, reverse=True)[:count],
-            key=lambda x: x[1]
-        )
-
-        summary = " ".join(item[2] for item in best)
-
-        if summary:
-            st.session_state.summary = summary
         else:
-            st.session_state.summary = (
-                "Summary could not be generated. "
-                "Please upload a text-based document."
-            )
+            sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
 
-    if st.session_state.summary:
-        st.success("Summary Generated!")
-        st.subheader("📌 Your Document Summary")
-        st.write(st.session_state.summary)
+            stop_words = {
+                "what", "when", "where", "who", "why",
+                "how", "is", "are", "the", "a", "an",
+                "of", "in", "to", "for", "and", "on",
+                "tell", "me", "about", "please"
+            }
+
+            words = set(re.findall(r'\b\w+\b', question.lower()))
+            keywords = words - stop_words
+
+            matches = []
+
+            for sentence in sentences:
+                sentence_words = set(
+                    re.findall(r'\b\w+\b', sentence.lower())
+                )
+                score = len(keywords & sentence_words)
+
+                if score > 0:
+                    matches.append((score, sentence.strip()))
+
+            matches.sort(key=lambda item: item[0], reverse=True)
+
+            if matches:
+                st.subheader("📌 Relevant Information")
+
+                for score, sentence in matches[:3]:
+                    st.write("•", sentence)
+            else:
+                st.info(
+                    "No matching information found in this document."
+                )
 
 st.divider()
 st.caption("IntelliAssist AI | Smart Document AI Assistant")
