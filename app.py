@@ -186,3 +186,42 @@ if file is not None and text.strip():
 
         st.write("Positive words:", positive_count)
         st.write("Negative words:", negative_count)
+st.divider()
+st.header("🎯 Intent Analysis")
+
+user_intent = st.text_input(
+    "Enter your message to identify its intent"
+)
+
+if st.button("Analyze Intent"):
+
+    if not user_intent.strip():
+        st.warning("Please enter a message.")
+
+    else:
+        message = user_intent.lower()
+
+        if any(word in message for word in [
+            "summarize", "summary", "short notes"
+        ]):
+            intent = "Summarization"
+
+        elif any(word in message for word in [
+            "search", "find", "look for"
+        ]):
+            intent = "Search"
+
+        elif any(word in message for word in [
+            "explain", "describe", "meaning"
+        ]):
+            intent = "Explanation"
+
+        elif any(word in message for word in [
+            "what", "who", "when", "where", "why", "how"
+        ]):
+            intent = "Question"
+
+        else:
+            intent = "General Request"
+
+        st.success("Detected Intent: " + intent)
