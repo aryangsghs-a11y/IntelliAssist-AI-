@@ -98,3 +98,16 @@ if file is not None:
 
 st.divider()
 st.caption("IntelliAssist AI | Smart Document AI Assistant")
+
+st.divider()
+    st.header("📝 Document Summarization")
+
+    if st.button("Summarize Document"):
+        if not text.strip():
+            st.warning("Please upload a readable document.")
+        else:
+            sentences = re.split(r'(?<=[.!?])\s+', text)
+            summary = " ".join(sentences[:5])
+
+            st.subheader("📌 Document Summary")
+            st.write(summary)
