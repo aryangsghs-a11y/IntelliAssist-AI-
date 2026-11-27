@@ -1,11 +1,9 @@
 import streamlit as st
+from google import genai
 from pypdf import PdfReader
 from docx import Document
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import re
 
 st.set_page_config(
     page_title="IntelliAssist AI",
@@ -21,11 +19,6 @@ if "chat_history" not in st.session_state:
 
 if "pages" not in st.session_state:
     st.session_state.pages = []
-
-uploaded_file = st.file_uploader(
-    "Upload PDF, TXT or DOCX",
-    type=["pdf", "txt", "docx"]
-)
 
 
 def read_document(file):
@@ -44,112 +37,87 @@ def read_document(file):
         text = file.read().decode(
             "utf-8", errors="ignore"
         )
-        pages.append({"text": text, "page": 1})
+        pages.append({
+            "text": text,
+            "page": 1
+        })
 
     elif file.name.endswith(".docx"):
         doc = Document(file)
         text = "\n".join(
-            paragraph.text for paragraph in doc.paragraphs
+            p.text for p in doc.paragraphs
         )
-        pages.append({"text": text, "page": 1})
+        pages.append({
+            "text": text,
+            "page": 1
+        })
 
     return pages
 
 
-def get_sentences(pages):
-    sentences = []
+def ask_gemini(question, pages, language):
+    client = genai.Client(
+        api_key=st.secrets["GEMINI_API_KEY"]
+    )
+
+    document_text = ""
 
     for page in pages:
-        parts = re.split(
-            r"(?<=[.!?])\s+|\n+",
-            page["text"]
+        document_text += (
+            f"\n[PAGE {page['page']}]\n"
+            f"{page['text']}\n"
         )
 
-        for part in parts:
-            part = part.strip()
-
-            if len(part.split()) >= 3:
-                sentences.append({
-                    "text": part,
-                    "page": page["page"]
-                })
-
-    return sentences
-
-
-def find_answer(question, sentences):
-    if not sentences:
-        return [], []
-
-    texts = [item["text"] for item in sentences]
-
-    try:
-        vectorizer = TfidfVectorizer(
-            stop_words="english",
-            ngram_range=(1, 2)
+    language_instruction = {
+        "Hindi": "Answer completely in simple Hindi.",
+        "English": "Answer completely in clear English.",
+        "Auto": (
+            "Answer in the same language used by the user "
+            "in their question."
         )
+    }
 
-        matrix = vectorizer.fit_transform(
-            texts + [question]
-        )
+    prompt = f"""
+You are IntelliAssist AI, an educational document assistant.
 
-        scores = cosine_similarity(
-            matrix[-1],
-            matrix[:-1]
-        ).flatten()
+Read the document and answer the user's question.
 
-        best_indices = scores.argsort()[::-1][:5]
+Rules:
+1. Understand the question properly.
+2. Give an accurate and complete answer.
+3. Explain concepts in easy language.
+4. Explain step by step when useful.
+5. Give examples when helpful.
+6. Use headings and bullet points where useful.
+7. If the user requests a short answer, keep it short.
+8. If the answer is not in the document, say so clearly.
+9. Do not invent information.
+10. Mention the source page numbers.
 
-        results = []
+LANGUAGE:
+{language_instruction[language]}
 
-        for index in best_indices:
-            if scores[index] > 0.01:
-                results.append({
-                    "text": sentences[index]["text"],
-                    "page": sentences[index]["page"],
-                    "score": scores[index]
-                })
+DOCUMENT:
+{document_text}
 
-        return results, scores
+QUESTION:
+{question}
+"""
 
-    except ValueError:
-        return [], []
-
-
-def answer_question(question, pages):
-    sentences = get_sentences(pages)
-
-    results, scores = find_answer(
-        question,
-        sentences
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
     )
 
-    if not results:
-        return (
-            "Is question se related information "
-            "PDF mein nahi mili."
-        )
+    return response.text
 
-    results.sort(
-        key=lambda item: item["score"],
-        reverse=True
-    )
 
-    answer = "\n\n".join(
-        item["text"] for item in results
-    )
+st.subheader("Upload Your Document")
 
-    source_pages = sorted(set(
-        item["page"] for item in results
-    ))
-
-    answer += "\n\nSource Page: "
-    answer += ", ".join(
-        str(page) for page in source_pages
-    )
-
-    return answer
-
+uploaded_file = st.file_uploader(
+    "Upload PDF, TXT or DOCX",
+    type=["pdf", "txt", "docx"]
+)
 
 if uploaded_file:
     st.session_state.pages = read_document(
@@ -158,35 +126,47 @@ if uploaded_file:
 
     st.success("Document uploaded successfully!")
 
-    full_text = "\n".join(
-        page["text"]
-        for page in st.session_state.pages
-    )
-
     st.subheader("Ask Your Document")
 
-    question = st.text_input(
-        "Enter any question",
-        placeholder="Ask anything about your PDF..."
+    language = st.selectbox(
+        "Choose Answer Language",
+        ["Auto", "Hindi", "English"]
+    )
+
+    question = st.text_area(
+        "Enter your question",
+        placeholder="Ask anything about your document..."
     )
 
     if st.button("Get Answer"):
         if question.strip():
-            answer = answer_question(
-                question,
-                st.session_state.pages
-            )
+            try:
+                with st.spinner(
+                    "IntelliAssist AI is preparing your answer..."
+                ):
+                    answer = ask_gemini(
+                        question,
+                        st.session_state.pages,
+                        language
+                    )
 
-            st.subheader("Answer")
-            st.write(answer)
+                st.subheader("Answer")
+                st.write(answer)
 
-            st.session_state.chat_history.append({
-                "question": question,
-                "answer": answer,
-                "date_time": datetime.now(
-                    ZoneInfo("Asia/Kolkata")
-                ).strftime("%d-%m-%Y %I:%M %p")
-            })
+                st.session_state.chat_history.append({
+                    "question": question,
+                    "answer": answer,
+                    "date_time": datetime.now(
+                        ZoneInfo("Asia/Kolkata")
+                    ).strftime("%d-%m-%Y %I:%M %p")
+                })
+
+            except Exception as e:
+                st.error(
+                    "Answer generate nahi hua. "
+                    "API settings check karein."
+                )
+                st.caption(str(e))
         else:
             st.warning("Please enter a question.")
 
@@ -200,64 +180,60 @@ if uploaded_file:
 
     if st.button("Search Document"):
         if search_query.strip():
-            sentences = get_sentences(
-                st.session_state.pages
+            full_text = "\n".join(
+                p["text"] for p in st.session_state.pages
             )
 
-            results, scores = find_answer(
-                search_query,
-                sentences
-            )
-
-            if results:
-                for item in results:
-                    st.write(item["text"])
-                    st.caption(
-                        f"Source Page: {item['page']}"
-                    )
+            if search_query.lower() in full_text.lower():
+                index = full_text.lower().find(
+                    search_query.lower()
+                )
+                st.write(full_text[index:index + 1000])
             else:
-                st.info("No relevant information found.")
+                st.info("No matching information found.")
 
     st.divider()
 
     st.subheader("Summarize Document")
 
     if st.button("Summarize Document"):
-        sentences = get_sentences(
-            st.session_state.pages
-        )
-
-        summary = " ".join(
-            item["text"] for item in sentences[:5]
-        )
-
-        st.write(
-            summary if summary else "No text found."
-        )
+        try:
+            with st.spinner("Preparing summary..."):
+                summary = ask_gemini(
+                    "Summarize the complete document with important points.",
+                    st.session_state.pages,
+                    language
+                )
+            st.write(summary)
+        except Exception as e:
+            st.error("Summary generate nahi hua.")
+            st.caption(str(e))
 
     st.divider()
 
     st.subheader("Sentiment Analysis")
 
     if st.button("Analyze Sentiment"):
+        text = "\n".join(
+            p["text"] for p in st.session_state.pages
+        ).lower()
+
         positive_words = [
             "good", "great", "excellent",
-            "happy", "success", "best", "positive"
+            "happy", "success", "best"
         ]
 
         negative_words = [
             "bad", "poor", "sad",
-            "failure", "problem", "negative", "worst"
+            "failure", "problem", "worst"
         ]
 
-        text = full_text.lower()
-
         positive = sum(
-            text.count(word) for word in positive_words
+            text.count(w) for w in positive_words
         )
 
         negative = sum(
-            text.count(word) for word in negative_words
+            text.count(w) for w in negative_words
         )
 
         if positive > negative:
@@ -272,18 +248,18 @@ if uploaded_file:
     st.subheader("Intent Analysis")
 
     if st.button("Analyze Intent"):
-        text = full_text.lower()
+        text = "\n".join(
+            p["text"] for p in st.session_state.pages
+        ).lower()
 
-        if any(word in text for word in [
+        if any(w in text for w in [
             "question", "ask", "query"
         ]):
             st.write("Intent: Information Seeking")
-
-        elif any(word in text for word in [
+        elif any(w in text for w in [
             "buy", "purchase", "order"
         ]):
             st.write("Intent: Purchase")
-
         else:
             st.write("Intent: General Information")
 
@@ -291,8 +267,7 @@ if uploaded_file:
 
     st.subheader("Source Citations")
     st.write(
-        "Source page numbers are shown with answers "
-        "and search results."
+        "Source page references are included in AI answers."
     )
 
     st.divider()
@@ -303,14 +278,12 @@ if uploaded_file:
         for item in reversed(
             st.session_state.chat_history
         ):
-            st.write("Question:", item["question"])
-            st.write("Answer:", item["answer"])
-
+            st.write("**Question:**", item["question"])
+            st.write("**Answer:**", item["answer"])
             st.caption(
                 "Date & Time (India): "
                 + item["date_time"]
             )
-
             st.divider()
     else:
         st.info("No chat history yet.")
