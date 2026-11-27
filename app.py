@@ -317,3 +317,8 @@ if st.session_state.chat_history:
         st.write("You:", chat["question"])
         st.write("Answer:", chat["answer"])
         st.divider()
+
+supabase = create_client(
+    st.secrets["SUPABASE_URL"],
+    st.secrets["SUPABASE_KEY"]
+)
