@@ -1,9 +1,10 @@
 import streamlit as st
 from pypdf import PdfReader
 from docx import Document
-from io import BytesIO
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 import re
 
 st.set_page_config(
@@ -12,328 +13,281 @@ st.set_page_config(
     layout="wide"
 )
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
 st.title("🤖 IntelliAssist AI")
 st.write("Smart Document AI Assistant")
 
-# Document Upload
-st.header("📄 Upload Your Document")
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
-file = st.file_uploader(
+if "pages" not in st.session_state:
+    st.session_state.pages = []
+
+uploaded_file = st.file_uploader(
     "Upload PDF, TXT or DOCX",
     type=["pdf", "txt", "docx"]
 )
 
-text = ""
-page_texts = []
-
-if file is not None:
+def read_document(file):
+    pages = []
 
     if file.name.endswith(".pdf"):
-        pdf = PdfReader(BytesIO(file.getvalue()))
-
-        for page_number, page in enumerate(pdf.pages, start=1):
-            page_content = page.extract_text() or ""
-            page_texts.append((page_number, page_content))
-            text += page_content + "\n"
-
-    elif file.name.endswith(".txt"):
-        text = file.getvalue().decode("utf-8", errors="replace")
-        page_texts = [(1, text)]
-
-    elif file.name.endswith(".docx"):
-        doc = Document(BytesIO(file.getvalue()))
-        text = "\n".join(
-            paragraph.text for paragraph in doc.paragraphs
-        )
-        page_texts = [(1, text)]
-
-    st.success("Document uploaded successfully!")
-    st.subheader("📖 Extracted Text")
-    st.text_area("Document Text", text, height=250)
-    st.write("Total characters:", len(text))
-
-# Ask Questions
-st.divider()
-st.header("💬 Ask Questions")
-
-question = st.text_input(
-    "Ask something about your document"
-)
-
-if st.button("Get Answer"):
-
-    if file is None or not text.strip():
-        st.warning("Please upload a readable document first.")
-
-    elif not question.strip():
-        st.warning("Please enter a question.")
-
-    else:
-        stop_words = {
-            "what", "when", "where", "who", "why",
-            "how", "is", "are", "the", "a", "an",
-            "of", "in", "to", "for", "and", "on",
-            "tell", "me", "about", "please"
-        }
-
-        keywords = set(
-            re.findall(r'\b\w+\b', question.lower())
-        ) - stop_words
-
-        matches = []
-
-        for page_number, page_content in page_texts:
-            sentences = re.split(
-                r'(?<=[.!?])\s+|\n+', page_content
-            )
-
-            for sentence in sentences:
-                sentence = sentence.strip()
-
-                if not sentence:
-                    continue
-
-                sentence_words = set(
-                    re.findall(r'\b\w+\b', sentence.lower())
-                )
-
-                score = len(keywords & sentence_words)
-
-                if score > 0:
-                    matches.append(
-                        (score, sentence, page_number)
-                    )
-
-        matches.sort(key=lambda item: item[0], reverse=True)
-
-        if matches:
-            answer = "\n".join(
-                sentence for score, sentence, page in matches[:3]
-            )
-
-            st.subheader("📌 Relevant Information")
-            st.write(answer)
-
-            st.subheader("📚 Source Citations")
-
-            shown_pages = sorted({
-                page for score, sentence, page in matches[:3]
+        pdf = PdfReader(file)
+        for i, page in enumerate(pdf.pages):
+            pages.append({
+                "text": page.extract_text() or "",
+                "page": i + 1
             })
 
-            for page in shown_pages:
-                st.write("Source: Page", page)
+    elif file.name.endswith(".txt"):
+        text = file.read().decode("utf-8", errors="ignore")
+        pages.append({"text": text, "page": 1})
 
-        else:
-            answer = "No matching information found in this document."
-            st.info(answer)
+    elif file.name.endswith(".docx"):
+        doc = Document(file)
+        text = "\n".join(p.text for p in doc.paragraphs)
+        pages.append({"text": text, "page": 1})
 
-        st.session_state.chat_history.append({
-            "question": question,
-            "answer": answer,
-            "date_time": datetime.now(
-                ZoneInfo("Asia/Kolkata")
-            ).strftime("%d-%m-%Y %I:%M %p")
-        })
+    return pages
 
-# Document Summarization
-st.divider()
-st.header("📝 Document Summarization")
 
-if file is not None and st.button("Summarize Document"):
+def get_questions(text):
+    pattern = r"(?m)^\s*(\d{1,2})[.)]\s*(.+?)(?=^\s*\d{1,2}[.)]\s*|\Z)"
+    matches = re.findall(pattern, text, re.S)
 
-    if text.strip():
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        summary = " ".join(sentences[:5])
+    questions = {}
+    for number, question in matches:
+        questions[int(number)] = re.sub(r"\s+", " ", question).strip()
 
-        st.subheader("📌 Document Summary")
-        st.write(summary)
+    return questions
 
-    else:
-        st.warning("No readable text found.")
 
-# Smart Document Search
-st.divider()
-st.header("🔎 Smart Document Search")
+def get_sentences(pages):
+    sentences = []
 
-if file is not None and text.strip():
+    for page in pages:
+        parts = re.split(r"(?<=[.!?])\s+|\n+", page["text"])
 
-    search_query = st.text_input(
-        "Search information in your document"
+        for part in parts:
+            part = part.strip()
+            if len(part.split()) >= 4:
+                sentences.append({
+                    "text": part,
+                    "page": page["page"]
+                })
+
+    return sentences
+
+
+def find_answer(question, sentences):
+    if not sentences:
+        return [], []
+
+    texts = [s["text"] for s in sentences]
+
+    try:
+        vectorizer = TfidfVectorizer(
+            stop_words="english",
+            ngram_range=(1, 2)
+        )
+        matrix = vectorizer.fit_transform(texts + [question])
+        scores = cosine_similarity(
+            matrix[-1],
+            matrix[:-1]
+        ).flatten()
+
+        best = scores.argsort()[::-1][:3]
+
+        results = []
+        for index in best:
+            if scores[index] > 0:
+                results.append(sentences[index])
+
+        return results, scores
+
+    except ValueError:
+        return [], []
+
+
+def solve_one(question, sentences):
+    results, scores = find_answer(question, sentences)
+
+    if not results:
+        return "Is question ka answer PDF mein nahi mila."
+
+    answer = " ".join(item["text"] for item in results)
+    pages = sorted(set(item["page"] for item in results))
+
+    return (
+        answer
+        + "\n\nSource Page: "
+        + ", ".join(map(str, pages))
     )
 
-    if st.button("Search Document"):
 
-        if not search_query.strip():
-            st.warning("Please enter something to search.")
+def solve_instruction(instruction, pages):
+    full_text = "\n".join(p["text"] for p in pages)
+    questions = get_questions(full_text)
+    sentences = get_sentences(pages)
 
-        else:
-            from sklearn.feature_extraction.text import TfidfVectorizer
-            from sklearn.metrics.pairwise import cosine_similarity
+    numbers = re.findall(
+        r"(?:question|ques|q)\s*(?:number|no\.?)?\s*(\d+)|(\d+)\s*(?:number|no\.?)",
+        instruction.lower()
+    )
 
-            sentences = [
-                s.strip()
-                for s in re.split(r'(?<=[.!?])\s+|\n+', text)
-                if s.strip()
-            ]
+    selected = [
+        int(a or b) for a, b in numbers
+    ]
 
-            if sentences:
-                try:
-                    vectorizer = TfidfVectorizer()
-                    vectors = vectorizer.fit_transform(
-                        sentences + [search_query]
-                    )
+    all_requested = any(
+        word in instruction.lower()
+        for word in ["all", "all questions", "saare", "sabhi", "pura", "poore"]
+    )
 
-                    scores = cosine_similarity(
-                        vectors[-1], vectors[:-1]
-                    ).flatten()
+    if all_requested:
+        selected = sorted(questions.keys())
 
-                    best_matches = scores.argsort()[::-1][:3]
+    if selected:
+        output = []
 
-                    st.subheader("📌 Search Results")
-                    found = False
+        for number in selected:
+            if number not in questions:
+                output.append(
+                    f"Question {number}: PDF mein nahi mila."
+                )
+                continue
 
-                    for index in best_matches:
-                        if scores[index] > 0:
-                            st.write("•", sentences[index])
-                            found = True
+            question = questions[number]
+            answer = solve_one(question, sentences)
 
-                    if not found:
-                        st.info("No matching information found.")
-
-                except ValueError:
-                    st.info("No matching information found.")
-
-# Sentiment Analysis
-st.divider()
-st.header("😊 Sentiment Analysis")
-
-if file is not None and text.strip():
-
-    if st.button("Analyze Sentiment"):
-
-        positive_words = {
-            "good", "great", "happy", "excellent",
-            "love", "best", "wonderful", "success",
-            "beautiful", "positive"
-        }
-
-        negative_words = {
-            "bad", "sad", "poor", "hate",
-            "worst", "terrible", "failure",
-            "problem", "negative", "angry"
-        }
-
-        words = set(re.findall(r'\b\w+\b', text.lower()))
-
-        positive_count = len(words & positive_words)
-        negative_count = len(words & negative_words)
-
-        if positive_count > negative_count:
-            st.success("😊 Positive Sentiment")
-        elif negative_count > positive_count:
-            st.error("😟 Negative Sentiment")
-        else:
-            st.info("😐 Neutral Sentiment")
-
-        st.write("Positive words:", positive_count)
-        st.write("Negative words:", negative_count)
-
-# Intent Analysis
-st.divider()
-st.header("🎯 Intent Analysis")
-
-user_intent = st.text_input(
-    "Enter your message to identify its intent"
-)
-
-if st.button("Analyze Intent"):
-
-    if not user_intent.strip():
-        st.warning("Please enter a message.")
-
-    else:
-        message = user_intent.lower()
-
-        if any(word in message for word in [
-            "summarize", "summary", "short notes"
-        ]):
-            intent = "Summarization"
-
-        elif any(word in message for word in [
-            "search", "find", "look for"
-        ]):
-            intent = "Search"
-
-        elif any(word in message for word in [
-            "explain", "describe", "meaning"
-        ]):
-            intent = "Explanation"
-
-        elif any(word in message for word in [
-            "what", "who", "when", "where", "why", "how"
-        ]):
-            intent = "Question"
-
-        else:
-            intent = "General Request"
-
-        st.success("Detected Intent: " + intent)
-
-        if file is not None and text.strip():
-
-            sentences = re.split(
-                r'(?<=[.!?])\s+|\n+', text
+            output.append(
+                f"Question {number}: {question}\n\nAnswer: {answer}"
             )
 
-            stop_words = {
-                "please", "explain", "tell", "me",
-                "about", "what", "is", "the", "a",
-                "an", "of", "in", "to", "how"
-            }
+        return "\n\n--------------------\n\n".join(output)
 
-            keywords = set(
-                re.findall(r'\b\w+\b', user_intent.lower())
-            ) - stop_words
+    return solve_one(instruction, sentences)
 
-            matches = []
 
-            for sentence in sentences:
-                sentence_words = set(
-                    re.findall(r'\b\w+\b', sentence.lower())
-                )
-                score = len(keywords & sentence_words)
+if uploaded_file:
+    st.session_state.pages = read_document(uploaded_file)
+    st.success("Document uploaded successfully!")
 
-                if score > 0:
-                    matches.append((score, sentence.strip()))
+    full_text = "\n".join(
+        p["text"] for p in st.session_state.pages
+    )
 
-            matches.sort(key=lambda item: item[0], reverse=True)
+    st.subheader("Ask Your Document")
 
-            if matches:
-                st.subheader("📖 Answer from Your Document")
+    question = st.text_input(
+        "Write your question or instruction",
+        placeholder="Example: 5 number question ka answer do"
+    )
 
-                for score, sentence in matches[:5]:
-                    st.write("•", sentence)
-            else:
-                st.info("No relevant information found in document.")
+    if st.button("Get Answer"):
+        if question.strip():
+            answer = solve_instruction(
+                question,
+                st.session_state.pages
+            )
 
-# Chat History
-st.divider()
-st.header("💬 Chat History")
+            st.subheader("Answer")
+            st.write(answer)
 
-if st.session_state.chat_history:
+            st.session_state.chat_history.append({
+                "question": question,
+                "answer": answer,
+                "date_time": datetime.now(
+                    ZoneInfo("Asia/Kolkata")
+                ).strftime("%d-%m-%Y %I:%M %p")
+            })
+        else:
+            st.warning("Please enter a question.")
 
-    st.subheader("📚 Previous Conversations")
+    st.divider()
 
-    for chat in reversed(st.session_state.chat_history):
-        st.write("**Date & Time (India):**", chat["date_time"])
-        st.write("**You:**", chat["question"])
-        st.write("**Answer:**", chat["answer"])
-        st.divider()
+    st.subheader("Relevant Information")
+    search_query = st.text_input("Search in document")
+
+    if st.button("Search Document"):
+        if search_query.strip():
+            sentences = get_sentences(st.session_state.pages)
+            results, scores = find_answer(search_query, sentences)
+
+            for item in results:
+                st.write(item["text"])
+                st.caption(f"Page {item['page']}")
+
+    st.divider()
+
+    st.subheader("Summarize Document")
+
+    if st.button("Summarize Document"):
+        sentences = get_sentences(st.session_state.pages)
+        summary = " ".join(
+            item["text"] for item in sentences[:5]
+        )
+        st.write(summary if summary else "No text found.")
+
+    st.divider()
+
+    st.subheader("Sentiment Analysis")
+
+    if st.button("Analyze Sentiment"):
+        positive = [
+            "good", "great", "excellent", "happy",
+            "success", "best", "positive"
+        ]
+        negative = [
+            "bad", "poor", "sad", "failure",
+            "problem", "negative", "worst"
+        ]
+
+        text = full_text.lower()
+        pos = sum(text.count(w) for w in positive)
+        neg = sum(text.count(w) for w in negative)
+
+        if pos > neg:
+            st.write("Sentiment: Positive")
+        elif neg > pos:
+            st.write("Sentiment: Negative")
+        else:
+            st.write("Sentiment: Neutral")
+
+    st.divider()
+
+    st.subheader("Intent Analysis")
+
+    if st.button("Analyze Intent"):
+        text = full_text.lower()
+
+        if any(w in text for w in ["question", "ask", "query"]):
+            st.write("Intent: Information Seeking")
+        elif any(w in text for w in ["buy", "purchase", "order"]):
+            st.write("Intent: Purchase")
+        else:
+            st.write("Intent: General Information")
+
+    st.divider()
+
+    st.subheader("Source Citations")
+    st.write(
+        "Source pages are displayed with answers above."
+    )
+
+    st.divider()
+
+    st.subheader("Chat History")
+
+    if st.session_state.chat_history:
+        for item in reversed(st.session_state.chat_history):
+            st.write("**Question:**", item["question"])
+            st.write("**Answer:**", item["answer"])
+            st.caption(
+                "Date & Time (India): " + item["date_time"]
+            )
+            st.divider()
+    else:
+        st.info("No chat history yet.")
 
 else:
-    st.info("Your conversations will appear here.")
-
-st.caption("IntelliAssist AI | Smart Document AI Assistant")
+    st.info("Please upload a PDF, TXT or DOCX file to begin.")
