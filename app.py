@@ -90,12 +90,25 @@ if file is not None:
             if matches:
                 st.subheader("📌 Relevant Information")
 
-                for score, sentence in matches[:3]:
-                    st.write("•", sentence)
-            else:
-                st.info(
-                    "No matching information found in this document."
+                answer = "\n".join(
+                    sentence for score, sentence in matches[:3]
                 )
+
+                st.write(answer)
+
+                st.session_state.chat_history.append({
+                    "question": question,
+                    "answer": answer
+                })
+
+            else:
+                answer = "No matching information found in this document."
+                st.info(answer)
+
+                st.session_state.chat_history.append({
+                    "question": question,
+                    "answer": answer
+                })
 
 st.divider()
 st.caption("IntelliAssist AI | Smart Document AI Assistant")
