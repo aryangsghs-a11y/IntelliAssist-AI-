@@ -1,5 +1,4 @@
 import streamlit as st
-from supabase import create_client
 from pypdf import PdfReader
 from docx import Document
 from io import BytesIO
@@ -11,9 +10,14 @@ st.set_page_config(
     layout="wide"
 )
 
+# Chat history initialization
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
 st.title("🤖 IntelliAssist AI")
 st.write("Smart Document AI Assistant")
 
+# Document Upload
 st.header("📄 Upload Your Document")
 
 file = st.file_uploader(
@@ -21,9 +25,9 @@ file = st.file_uploader(
     type=["pdf", "txt", "docx"]
 )
 
-if file is not None:
+text = ""
 
-    text = ""
+if file is not None:
 
     if file.name.endswith(".pdf"):
         pdf = PdfReader(BytesIO(file.getvalue()))
@@ -45,85 +49,83 @@ if file is not None:
 
     st.write("Total characters:", len(text))
 
-    st.divider()
+# Ask Questions
+st.divider()
+st.header("💬 Ask Questions")
 
-    st.header("💬 Ask Questions")
+question = st.text_input(
+    "Ask something about your document"
+)
 
-    question = st.text_input(
-        "Ask something about your document"
-    )
+if st.button("Get Answer"):
 
-    if st.button("Get Answer"):
+    if file is None or not text.strip():
+        st.warning("Please upload a readable document first.")
 
-        if not text.strip():
-            st.warning("No readable text found in document.")
+    elif not question.strip():
+        st.warning("Please enter a question.")
 
-        elif not question.strip():
-            st.warning("Please enter a question.")
+    else:
+        sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
+
+        stop_words = {
+            "what", "when", "where", "who", "why",
+            "how", "is", "are", "the", "a", "an",
+            "of", "in", "to", "for", "and", "on",
+            "tell", "me", "about", "please"
+        }
+
+        words = set(re.findall(r'\b\w+\b', question.lower()))
+        keywords = words - stop_words
+
+        matches = []
+
+        for sentence in sentences:
+            sentence_words = set(
+                re.findall(r'\b\w+\b', sentence.lower())
+            )
+            score = len(keywords & sentence_words)
+
+            if score > 0:
+                matches.append((score, sentence.strip()))
+
+        matches.sort(key=lambda item: item[0], reverse=True)
+
+        if matches:
+            answer = "\n".join(
+                sentence for score, sentence in matches[:3]
+            )
+
+            st.subheader("📌 Relevant Information")
+            st.write(answer)
 
         else:
-            sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
+            answer = "No matching information found in this document."
+            st.info(answer)
 
-            stop_words = {
-                "what", "when", "where", "who", "why",
-                "how", "is", "are", "the", "a", "an",
-                "of", "in", "to", "for", "and", "on",
-                "tell", "me", "about", "please"
-            }
+        # Automatically save conversation
+        st.session_state.chat_history.append({
+            "question": question,
+            "answer": answer
+        })
 
-            words = set(re.findall(r'\b\w+\b', question.lower()))
-            keywords = words - stop_words
-
-            matches = []
-
-            for sentence in sentences:
-                sentence_words = set(
-                    re.findall(r'\b\w+\b', sentence.lower())
-                )
-                score = len(keywords & sentence_words)
-
-                if score > 0:
-                    matches.append((score, sentence.strip()))
-
-            matches.sort(key=lambda item: item[0], reverse=True)
-
-            if matches:
-                st.subheader("📌 Relevant Information")
-
-                answer = "\n".join(
-                    sentence for score, sentence in matches[:3]
-                )
-
-                st.write(answer)
-
-                st.session_state.chat_history.append({
-                    "question": question,
-                    "answer": answer
-                })
-
-            else:
-                answer = "No matching information found in this document."
-                st.info(answer)
-
-                st.session_state.chat_history.append({
-                    "question": question,
-                    "answer": answer
-                })
-
-st.divider()
-st.caption("IntelliAssist AI | Smart Document AI Assistant")
+# Document Summarization
 st.divider()
 st.header("📝 Document Summarization")
 
 if file is not None and st.button("Summarize Document"):
+
     if text.strip():
         sentences = re.split(r'(?<=[.!?])\s+', text)
         summary = " ".join(sentences[:5])
 
         st.subheader("📌 Document Summary")
         st.write(summary)
+
     else:
         st.warning("No readable text found.")
+
+# Smart Document Search
 st.divider()
 st.header("🔎 Smart Document Search")
 
@@ -149,22 +151,34 @@ if file is not None and text.strip():
             ]
 
             if sentences:
-                vectorizer = TfidfVectorizer()
-                vectors = vectorizer.fit_transform(
-                    sentences + [search_query]
-                )
+                try:
+                    vectorizer = TfidfVectorizer()
+                    vectors = vectorizer.fit_transform(
+                        sentences + [search_query]
+                    )
 
-                scores = cosine_similarity(
-                    vectors[-1], vectors[:-1]
-                ).flatten()
+                    scores = cosine_similarity(
+                        vectors[-1], vectors[:-1]
+                    ).flatten()
 
-                best_matches = scores.argsort()[::-1][:3]
+                    best_matches = scores.argsort()[::-1][:3]
 
-                st.subheader("📌 Search Results")
+                    st.subheader("📌 Search Results")
 
-                for index in best_matches:
-                    if scores[index] > 0:
-                        st.write("•", sentences[index])
+                    found = False
+
+                    for index in best_matches:
+                        if scores[index] > 0:
+                            st.write("•", sentences[index])
+                            found = True
+
+                    if not found:
+                        st.info("No matching information found.")
+
+                except ValueError:
+                    st.info("No matching information found.")
+
+# Sentiment Analysis
 st.divider()
 st.header("😊 Sentiment Analysis")
 
@@ -200,6 +214,8 @@ if file is not None and text.strip():
 
         st.write("Positive words:", positive_count)
         st.write("Negative words:", negative_count)
+
+# Intent Analysis
 st.divider()
 st.header("🎯 Intent Analysis")
 
@@ -239,7 +255,9 @@ if st.button("Analyze Intent"):
             intent = "General Request"
 
         st.success("Detected Intent: " + intent)
+
         if file is not None and text.strip():
+
             sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
 
             stop_words = {
@@ -270,65 +288,24 @@ if st.button("Analyze Intent"):
 
                 for score, sentence in matches[:5]:
                     st.write("•", sentence)
+
             else:
                 st.info("No relevant information found in document.")
-                st.divider()
+
+# Chat History
+st.divider()
 st.header("💬 Chat History")
 
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-chat_question = st.text_input(
-    "Ask a question for chat history",
-    key="history_question"
-)
-
-if st.button("Ask and Save"):
-
-    if file is None or not text.strip():
-        st.warning("Please upload a document first.")
-
-    elif not chat_question.strip():
-        st.warning("Please enter a question.")
-
-    else:
-        sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
-
-        keywords = set(
-            re.findall(r'\b\w+\b', chat_question.lower())
-        )
-
-        matches = []
-
-        for sentence in sentences:
-            sentence_words = set(
-                re.findall(r'\b\w+\b', sentence.lower())
-            )
-            score = len(keywords & sentence_words)
-
-            if score > 0:
-                matches.append((score, sentence.strip()))
-
-        matches.sort(key=lambda item: item[0], reverse=True)
-
-        if matches:
-            answer = " ".join(
-                sentence for score, sentence in matches[:3]
-            )
-        else:
-            answer = "No matching information found."
-
-        st.session_state.chat_history.append({
-            "question": chat_question,
-            "answer": answer
-        })
-
 if st.session_state.chat_history:
+
     st.subheader("📚 Previous Conversations")
 
     for chat in reversed(st.session_state.chat_history):
-        st.write("You:", chat["question"])
-        st.write("Answer:", chat["answer"])
+        st.write("**You:**", chat["question"])
+        st.write("**Answer:**", chat["answer"])
         st.divider()
 
+else:
+    st.info("Your conversations will appear here.")
 
+st.caption("IntelliAssist AI | Smart Document AI Assistant")
