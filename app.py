@@ -1,4 +1,5 @@
 import streamlit as st
+from supabase import create_client
 from pypdf import PdfReader
 from docx import Document
 from io import BytesIO
