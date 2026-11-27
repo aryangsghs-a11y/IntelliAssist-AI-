@@ -2,6 +2,7 @@ import streamlit as st
 from pypdf import PdfReader
 from docx import Document
 from io import BytesIO
+from datetime import datetime
 import re
 
 st.set_page_config(
@@ -49,7 +50,6 @@ if file is not None:
         page_texts = [(1, text)]
 
     st.success("Document uploaded successfully!")
-
     st.subheader("📖 Extracted Text")
     st.text_area("Document Text", text, height=250)
     st.write("Total characters:", len(text))
@@ -131,7 +131,8 @@ if st.button("Get Answer"):
 
         st.session_state.chat_history.append({
             "question": question,
-            "answer": answer
+            "answer": answer,
+            "date_time": datetime.now().strftime("%d-%m-%Y %I:%M %p")
         })
 
 # Document Summarization
@@ -189,7 +190,6 @@ if file is not None and text.strip():
                     best_matches = scores.argsort()[::-1][:3]
 
                     st.subheader("📌 Search Results")
-
                     found = False
 
                     for index in best_matches:
@@ -325,6 +325,7 @@ if st.session_state.chat_history:
     st.subheader("📚 Previous Conversations")
 
     for chat in reversed(st.session_state.chat_history):
+        st.write("**Date & Time:**", chat["date_time"])
         st.write("**You:**", chat["question"])
         st.write("**Answer:**", chat["answer"])
         st.divider()
