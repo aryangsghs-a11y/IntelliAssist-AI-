@@ -10,7 +10,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# Chat history initialization
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
@@ -26,27 +25,33 @@ file = st.file_uploader(
 )
 
 text = ""
+page_texts = []
 
 if file is not None:
 
     if file.name.endswith(".pdf"):
         pdf = PdfReader(BytesIO(file.getvalue()))
-        for page in pdf.pages:
-            text += page.extract_text() or ""
+
+        for page_number, page in enumerate(pdf.pages, start=1):
+            page_content = page.extract_text() or ""
+            page_texts.append((page_number, page_content))
+            text += page_content + "\n"
 
     elif file.name.endswith(".txt"):
         text = file.getvalue().decode("utf-8", errors="replace")
+        page_texts = [(1, text)]
 
     elif file.name.endswith(".docx"):
         doc = Document(BytesIO(file.getvalue()))
-        for paragraph in doc.paragraphs:
-            text += paragraph.text + "\n"
+        text = "\n".join(
+            paragraph.text for paragraph in doc.paragraphs
+        )
+        page_texts = [(1, text)]
 
     st.success("Document uploaded successfully!")
 
     st.subheader("📖 Extracted Text")
     st.text_area("Document Text", text, height=250)
-
     st.write("Total characters:", len(text))
 
 # Ask Questions
@@ -66,8 +71,6 @@ if st.button("Get Answer"):
         st.warning("Please enter a question.")
 
     else:
-        sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
-
         stop_words = {
             "what", "when", "where", "who", "why",
             "how", "is", "are", "the", "a", "an",
@@ -75,35 +78,57 @@ if st.button("Get Answer"):
             "tell", "me", "about", "please"
         }
 
-        words = set(re.findall(r'\b\w+\b', question.lower()))
-        keywords = words - stop_words
+        keywords = set(
+            re.findall(r'\b\w+\b', question.lower())
+        ) - stop_words
 
         matches = []
 
-        for sentence in sentences:
-            sentence_words = set(
-                re.findall(r'\b\w+\b', sentence.lower())
+        for page_number, page_content in page_texts:
+            sentences = re.split(
+                r'(?<=[.!?])\s+|\n+', page_content
             )
-            score = len(keywords & sentence_words)
 
-            if score > 0:
-                matches.append((score, sentence.strip()))
+            for sentence in sentences:
+                sentence = sentence.strip()
+
+                if not sentence:
+                    continue
+
+                sentence_words = set(
+                    re.findall(r'\b\w+\b', sentence.lower())
+                )
+
+                score = len(keywords & sentence_words)
+
+                if score > 0:
+                    matches.append(
+                        (score, sentence, page_number)
+                    )
 
         matches.sort(key=lambda item: item[0], reverse=True)
 
         if matches:
             answer = "\n".join(
-                sentence for score, sentence in matches[:3]
+                sentence for score, sentence, page in matches[:3]
             )
 
             st.subheader("📌 Relevant Information")
             st.write(answer)
 
+            st.subheader("📚 Source Citations")
+
+            shown_pages = sorted({
+                page for score, sentence, page in matches[:3]
+            })
+
+            for page in shown_pages:
+                st.write("Source: Page", page)
+
         else:
             answer = "No matching information found in this document."
             st.info(answer)
 
-        # Automatically save conversation
         st.session_state.chat_history.append({
             "question": question,
             "answer": answer
@@ -205,10 +230,8 @@ if file is not None and text.strip():
 
         if positive_count > negative_count:
             st.success("😊 Positive Sentiment")
-
         elif negative_count > positive_count:
             st.error("😟 Negative Sentiment")
-
         else:
             st.info("😐 Neutral Sentiment")
 
@@ -258,7 +281,9 @@ if st.button("Analyze Intent"):
 
         if file is not None and text.strip():
 
-            sentences = re.split(r'(?<=[.!?])\s+|\n+', text)
+            sentences = re.split(
+                r'(?<=[.!?])\s+|\n+', text
+            )
 
             stop_words = {
                 "please", "explain", "tell", "me",
@@ -288,7 +313,6 @@ if st.button("Analyze Intent"):
 
                 for score, sentence in matches[:5]:
                     st.write("•", sentence)
-
             else:
                 st.info("No relevant information found in document.")
 
