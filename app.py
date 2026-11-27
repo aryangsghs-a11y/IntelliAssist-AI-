@@ -3,6 +3,7 @@ from pypdf import PdfReader
 from docx import Document
 from io import BytesIO
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import re
 
 st.set_page_config(
@@ -132,7 +133,9 @@ if st.button("Get Answer"):
         st.session_state.chat_history.append({
             "question": question,
             "answer": answer,
-            "date_time": datetime.now().strftime("%d-%m-%Y %I:%M %p")
+            "date_time": datetime.now(
+                ZoneInfo("Asia/Kolkata")
+            ).strftime("%d-%m-%Y %I:%M %p")
         })
 
 # Document Summarization
@@ -325,7 +328,7 @@ if st.session_state.chat_history:
     st.subheader("📚 Previous Conversations")
 
     for chat in reversed(st.session_state.chat_history):
-        st.write("**Date & Time:**", chat["date_time"])
+        st.write("**Date & Time (India):**", chat["date_time"])
         st.write("**You:**", chat["question"])
         st.write("**Answer:**", chat["answer"])
         st.divider()
