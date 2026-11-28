@@ -1,17 +1,26 @@
 import streamlit as st
 import time
+import hashlib
+import numpy as np
+import faiss
+
 from google import genai
 from supabase import create_client
 from pypdf import PdfReader
 from docx import Document
 from io import BytesIO
+
 from streamlit_cookies_manager import EncryptedCookieManager
+from sentence_transformers import SentenceTransformer
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 
 st.set_page_config(
     page_title="IntelliAssist AI",
     page_icon="🤖",
     layout="wide"
 )
+
 
 # CONNECTIONS
 try:
@@ -33,10 +42,20 @@ except Exception as error:
     st.error(f"Connection error: {error}")
     st.stop()
 
+
 if not cookies.ready():
     st.stop()
 
+
 MODEL = "gemini-3.5-flash-lite"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+
+# LOAD EMBEDDING MODEL
+@st.cache_resource
+def load_embedding_model():
+    return SentenceTransformer(EMBEDDING_MODEL)
+
 
 # SESSION STATE
 defaults = {
@@ -46,7 +65,11 @@ defaults = {
     "logged_in": False,
     "document_text": "",
     "pages": [],
-    "chat_history": []
+    "chat_history": [],
+    "faiss_index": None,
+    "document_chunks": [],
+    "document_hash": None,
+    "last_sources": []
 }
 
 for key, value in defaults.items():
@@ -62,7 +85,7 @@ def clear_login():
     st.session_state.chat_history = []
 
 
-# RESTORE LOGIN FROM COOKIE
+# RESTORE LOGIN
 if not st.session_state.access_token:
     saved_refresh_token = cookies.get("refresh_token")
 
@@ -108,6 +131,7 @@ if (
             st.session_state.access_token,
             st.session_state.refresh_token
         )
+
         st.session_state.logged_in = True
 
     except Exception:
@@ -172,7 +196,6 @@ def login():
                 st.error("Email ya password check karein.")
 
 
-# SHOW LOGIN IF NOT LOGGED IN
 if not st.session_state.logged_in:
     login()
     st.stop()
@@ -225,8 +248,97 @@ def read_document(file):
     return text, pages
 
 
-# GEMINI ANSWER
-def ask_gemini(question, document, language):
+# BUILD RAG VECTOR DATABASE
+def build_vector_database(pages):
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=900,
+        chunk_overlap=150
+    )
+
+    chunks = []
+
+    for page in pages:
+        page_chunks = splitter.split_text(
+            page["text"]
+        )
+
+        for chunk in page_chunks:
+            if chunk.strip():
+                chunks.append({
+                    "text": chunk,
+                    "page": page["page"]
+                })
+
+    if not chunks:
+        raise ValueError(
+            "No readable text found for creating embeddings."
+        )
+
+    model = load_embedding_model()
+
+    texts = [
+        chunk["text"]
+        for chunk in chunks
+    ]
+
+    embeddings = model.encode(
+        texts,
+        convert_to_numpy=True,
+        normalize_embeddings=True
+    )
+
+    embeddings = np.asarray(
+        embeddings,
+        dtype=np.float32
+    )
+
+    index = faiss.IndexFlatIP(
+        embeddings.shape[1]
+    )
+
+    index.add(embeddings)
+
+    return index, chunks
+
+
+# SEMANTIC SEARCH
+def search_document(question, top_k=5):
+    model = load_embedding_model()
+
+    query_embedding = model.encode(
+        [question],
+        convert_to_numpy=True,
+        normalize_embeddings=True
+    )
+
+    query_embedding = np.asarray(
+        query_embedding,
+        dtype=np.float32
+    )
+
+    index = st.session_state.faiss_index
+    chunks = st.session_state.document_chunks
+
+    count = min(top_k, len(chunks))
+
+    scores, indices = index.search(
+        query_embedding,
+        count
+    )
+
+    results = []
+
+    for score, idx in zip(scores[0], indices[0]):
+        if idx >= 0:
+            item = chunks[idx].copy()
+            item["score"] = float(score)
+            results.append(item)
+
+    return results
+
+
+# GEMINI RAG ANSWER
+def ask_gemini(question, context, language):
     if language == "Hindi":
         instruction = "Answer completely in simple Hindi."
 
@@ -239,23 +351,25 @@ def ask_gemini(question, document, language):
         )
 
     prompt = f"""
-You are IntelliAssist AI, a document assistant.
+You are IntelliAssist AI, a RAG-based document assistant.
 
-Follow these rules:
-1. Read the document carefully.
-2. Answer using information from the document.
+Use ONLY the retrieved document context below.
+
+Rules:
+1. Answer using the provided context.
+2. Do not invent information.
 3. Explain in simple language.
 4. Give examples when useful.
 5. Explain step by step when needed.
-6. Mention source page numbers when possible.
-7. Do not invent information.
-8. If the answer is not in the document, say so clearly.
+6. Mention source page numbers using [Page X].
+7. If information is not present, clearly say it was not found.
+8. Do not make up page numbers.
 
 LANGUAGE:
 {instruction}
 
-DOCUMENT:
-{document[:100000]}
+RETRIEVED DOCUMENT CONTEXT:
+{context}
 
 QUESTION:
 {question}
@@ -273,7 +387,7 @@ QUESTION:
             if response.text:
                 return response.text
 
-            return "AI did not return an answer. Please try again."
+            return "AI did not return an answer."
 
         except Exception as error:
             message = str(error).upper()
@@ -358,25 +472,48 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
-    try:
-        text, pages = read_document(uploaded_file)
+    file_bytes = uploaded_file.getvalue()
 
-        if not text.strip():
-            st.warning(
-                "No readable text found in this document."
+    current_hash = hashlib.sha256(
+        file_bytes
+    ).hexdigest()
+
+    if current_hash != st.session_state.document_hash:
+        try:
+            with st.spinner(
+                "Reading document and creating embeddings..."
+            ):
+                text, pages = read_document(
+                    BytesIO(file_bytes)
+                )
+
+                if not text.strip():
+                    st.warning(
+                        "No readable text found in this document."
+                    )
+
+                else:
+                    index, chunks = build_vector_database(
+                        pages
+                    )
+
+                    st.session_state.document_text = text
+                    st.session_state.pages = pages
+                    st.session_state.faiss_index = index
+                    st.session_state.document_chunks = chunks
+                    st.session_state.document_hash = current_hash
+
+                    st.success(
+                        "Document uploaded and FAISS database created!"
+                    )
+
+        except Exception as error:
+            st.error(
+                f"Document processing error: {error}"
             )
 
-        else:
-            st.session_state.document_text = text
-            st.session_state.pages = pages
 
-            st.success("Document uploaded successfully!")
-
-    except Exception as error:
-        st.error(f"Document error: {error}")
-
-
-# ASK QUESTION
+# ASK QUESTION USING RAG
 st.divider()
 st.subheader("💬 Ask a Question")
 
@@ -386,7 +523,7 @@ question = st.text_area(
 )
 
 if st.button("🤖 Get Answer"):
-    if not st.session_state.document_text:
+    if st.session_state.faiss_index is None:
         st.warning("Please upload a document first.")
 
     elif not question.strip():
@@ -394,12 +531,36 @@ if st.button("🤖 Get Answer"):
 
     else:
         try:
-            with st.spinner("Generating answer..."):
+            with st.spinner(
+                "Searching document and generating answer..."
+            ):
+                results = search_document(question)
+
+                context_parts = []
+
+                source_pages = sorted(
+                    set(
+                        item["page"]
+                        for item in results
+                    )
+                )
+
+                for item in results:
+                    context_parts.append(
+                        f"[Page {item['page']}]\n{item['text']}"
+                    )
+
+                context = "\n\n".join(
+                    context_parts
+                )
+
                 answer = ask_gemini(
                     question,
-                    st.session_state.document_text,
+                    context,
                     language
                 )
+
+            st.session_state.last_sources = source_pages
 
             save_chat(question, answer)
 
@@ -410,6 +571,14 @@ if st.button("🤖 Get Answer"):
 
             st.subheader("Answer")
             st.write(answer)
+
+            st.subheader("📚 Source Citations")
+
+            if source_pages:
+                for page in source_pages:
+                    st.write(f"📄 Document Page: {page}")
+            else:
+                st.info("No source page found.")
 
         except Exception as error:
             st.error(f"Answer error: {error}")
@@ -438,36 +607,42 @@ if st.button("Generate Summary"):
             st.error(f"Summary error: {error}")
 
 
-# DOCUMENT SEARCH
+# SEMANTIC SEARCH
 st.divider()
-st.subheader("🔍 Search in Document")
+st.subheader("🔍 Semantic Search")
 
-search_word = st.text_input(
-    "Enter search word"
+semantic_query = st.text_input(
+    "Enter what you want to find in the document"
 )
 
 if st.button("Search Document"):
-    document = st.session_state.document_text
-
-    if not document:
+    if st.session_state.faiss_index is None:
         st.warning("Upload a document first.")
 
-    elif not search_word.strip():
-        st.warning("Enter a search word.")
-
-    elif search_word.lower() in document.lower():
-        index = document.lower().find(
-            search_word.lower()
-        )
-
-        st.success("Word found in document.")
-
-        st.write(
-            document[index:index + 1000]
-        )
+    elif not semantic_query.strip():
+        st.warning("Enter a search query.")
 
     else:
-        st.info("Word not found.")
+        try:
+            results = search_document(
+                semantic_query,
+                top_k=5
+            )
+
+            if results:
+                st.success("Relevant information found!")
+
+                for item in results:
+                    with st.expander(
+                        f"📄 Page {item['page']}"
+                    ):
+                        st.write(item["text"])
+
+            else:
+                st.info("No relevant information found.")
+
+        except Exception as error:
+            st.error(f"Search error: {error}")
 
 
 # SENTIMENT ANALYSIS
