@@ -8,3 +8,4 @@ sentence-transformers
 scikit-learn
 supabase
 google-genai
+streamlit-cookies-manager-v2==0.3.1
