@@ -27,6 +27,7 @@ def read_document(file):
 
     if file.name.endswith(".pdf"):
         pdf = PdfReader(file)
+
         for i, page in enumerate(pdf.pages):
             pages.append({
                 "text": page.extract_text() or "",
@@ -37,14 +38,20 @@ def read_document(file):
         text = file.read().decode(
             "utf-8", errors="ignore"
         )
-        pages.append({"text": text, "page": 1})
+        pages.append({
+            "text": text,
+            "page": 1
+        })
 
     elif file.name.endswith(".docx"):
         doc = Document(file)
         text = "\n".join(
             p.text for p in doc.paragraphs
         )
-        pages.append({"text": text, "page": 1})
+        pages.append({
+            "text": text,
+            "page": 1
+        })
 
     return pages
 
@@ -103,9 +110,13 @@ QUESTION:
     for attempt in range(3):
         try:
             response = client.models.generate_content(
-                model="gemini-3.5-flash",
+                model="gemini-3.5-flash-lite",
                 contents=prompt
             )
+
+            if not response.text:
+                return "AI did not return an answer. Please try again."
+
             return response.text
 
         except Exception as e:
@@ -128,14 +139,13 @@ QUESTION:
 
             if temporary_error:
                 raise RuntimeError(
-                    "Gemini server abhi busy hai. "
-                    "Kuch der baad dobara try karein."
+                    "Gemini server is busy. Please try again later."
                 )
 
             raise
 
 
-st.subheader("Upload Your Document")
+st.subheader("📄 Upload Your Document")
 
 uploaded_file = st.file_uploader(
     "Upload PDF, TXT or DOCX",
@@ -149,7 +159,7 @@ if uploaded_file:
 
     st.success("Document uploaded successfully!")
 
-    st.subheader("Ask Your Document")
+    st.subheader("💬 Ask Your Document")
 
     language = st.selectbox(
         "Choose Answer Language",
@@ -161,7 +171,7 @@ if uploaded_file:
         placeholder="Ask anything about your document..."
     )
 
-    if st.button("Get Answer"):
+    if st.button("🤖 Get Answer"):
         if question.strip():
             try:
                 with st.spinner(
@@ -191,7 +201,8 @@ if uploaded_file:
             st.warning("Please enter a question.")
 
     st.divider()
-    st.subheader("Relevant Information")
+
+    st.subheader("🔎 Relevant Information")
 
     search_query = st.text_input(
         "Search in document"
@@ -212,7 +223,8 @@ if uploaded_file:
                 st.info("No matching information found.")
 
     st.divider()
-    st.subheader("Summarize Document")
+
+    st.subheader("📝 Summarize Document")
 
     if st.button("Summarize Document"):
         try:
@@ -222,13 +234,15 @@ if uploaded_file:
                     st.session_state.pages,
                     language
                 )
+
             st.write(summary)
 
         except Exception as e:
             st.error(str(e))
 
     st.divider()
-    st.subheader("Sentiment Analysis")
+
+    st.subheader("😊 Sentiment Analysis")
 
     if st.button("Analyze Sentiment"):
         text = "\n".join(
@@ -261,7 +275,8 @@ if uploaded_file:
             st.write("Sentiment: Neutral")
 
     st.divider()
-    st.subheader("Intent Analysis")
+
+    st.subheader("🎯 Intent Analysis")
 
     if st.button("Analyze Intent"):
         text = "\n".join(
@@ -272,33 +287,58 @@ if uploaded_file:
             "question", "ask", "query"
         ]):
             st.write("Intent: Information Seeking")
+
         elif any(w in text for w in [
             "buy", "purchase", "order"
         ]):
             st.write("Intent: Purchase")
+
         else:
             st.write("Intent: General Information")
 
     st.divider()
-    st.subheader("Source Citations")
+
+    st.subheader("📚 Source Citations")
     st.write(
-        "Source page references are included in AI answers."
+        "AI answers are instructed to mention source page numbers."
     )
 
     st.divider()
-    st.subheader("Chat History")
+
+    st.subheader("💬 Chat History")
 
     if st.session_state.chat_history:
+
+        history_text = ""
+
         for item in reversed(
             st.session_state.chat_history
         ):
             st.write("**Question:**", item["question"])
             st.write("**Answer:**", item["answer"])
+
             st.caption(
                 "Date & Time (India): "
                 + item["date_time"]
             )
+
             st.divider()
+
+        for item in st.session_state.chat_history:
+            history_text += (
+                "Question: " + item["question"] + "\n"
+                "Answer: " + item["answer"] + "\n"
+                "Date: " + item["date_time"] + "\n\n"
+                "-----------------------------\n\n"
+            )
+
+        st.download_button(
+            label="📥 Download Chat History",
+            data=history_text,
+            file_name="IntelliAssist_Chat_History.txt",
+            mime="text/plain"
+        )
+
     else:
         st.info("No chat history yet.")
 
