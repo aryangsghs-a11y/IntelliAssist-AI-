@@ -202,14 +202,14 @@ if not st.session_state.logged_in:
 
 
 # DOCUMENT READER
-def read_document(file):
+def read_document(file_bytes, filename):
     text = ""
     pages = []
 
-    filename = file.name.lower()
+    filename = filename.lower()
 
     if filename.endswith(".pdf"):
-        reader = PdfReader(BytesIO(file.read()))
+        reader = PdfReader(BytesIO(file_bytes))
 
         for number, page in enumerate(reader.pages, 1):
             content = page.extract_text() or ""
@@ -222,7 +222,7 @@ def read_document(file):
             text += f"\n[PAGE {number}]\n{content}"
 
     elif filename.endswith(".txt"):
-        text = file.read().decode(
+        text = file_bytes.decode(
             "utf-8",
             errors="ignore"
         )
@@ -233,7 +233,7 @@ def read_document(file):
         })
 
     elif filename.endswith(".docx"):
-        doc = Document(BytesIO(file.read()))
+        doc = Document(BytesIO(file_bytes))
 
         text = "\n".join(
             paragraph.text
@@ -484,7 +484,8 @@ if uploaded_file:
                 "Reading document and creating embeddings..."
             ):
                 text, pages = read_document(
-                    BytesIO(file_bytes)
+                    file_bytes,
+                    uploaded_file.name
                 )
 
                 if not text.strip():
