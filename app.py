@@ -5,8 +5,7 @@ from supabase import create_client
 from pypdf import PdfReader
 from docx import Document
 from io import BytesIO
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from streamlit_cookies_manager import EncryptedCookieManager
 
 st.set_page_config(
     page_title="IntelliAssist AI",
@@ -25,8 +24,16 @@ try:
         api_key=st.secrets["GEMINI_API_KEY"]
     )
 
+    cookies = EncryptedCookieManager(
+        prefix="IntelliAssist/",
+        password=st.secrets["COOKIES_PASSWORD"]
+    )
+
 except Exception as error:
     st.error(f"Connection error: {error}")
+    st.stop()
+
+if not cookies.ready():
     st.stop()
 
 MODEL = "gemini-3.5-flash-lite"
@@ -53,6 +60,58 @@ def clear_login():
     st.session_state.refresh_token = None
     st.session_state.user_id = None
     st.session_state.chat_history = []
+
+
+# RESTORE LOGIN FROM COOKIE
+if not st.session_state.access_token:
+    saved_refresh_token = cookies.get("refresh_token")
+
+    if saved_refresh_token:
+        try:
+            result = supabase.auth.refresh_session(
+                saved_refresh_token
+            )
+
+            if result.session and result.user:
+                st.session_state.access_token = (
+                    result.session.access_token
+                )
+
+                st.session_state.refresh_token = (
+                    result.session.refresh_token
+                )
+
+                st.session_state.user_id = str(
+                    result.user.id
+                )
+
+                st.session_state.logged_in = True
+
+                cookies["refresh_token"] = (
+                    result.session.refresh_token
+                )
+                cookies.save()
+
+        except Exception:
+            cookies["refresh_token"] = ""
+            cookies.save()
+            clear_login()
+
+
+# RESTORE ACTIVE SESSION
+if (
+    st.session_state.access_token
+    and st.session_state.refresh_token
+):
+    try:
+        supabase.auth.set_session(
+            st.session_state.access_token,
+            st.session_state.refresh_token
+        )
+        st.session_state.logged_in = True
+
+    except Exception:
+        clear_login()
 
 
 # LOGIN
@@ -101,30 +160,19 @@ def login():
 
                 st.session_state.logged_in = True
 
+                cookies["refresh_token"] = (
+                    result.session.refresh_token
+                )
+                cookies.save()
+
                 st.success("Login successful!")
                 st.rerun()
 
-            except Exception as error:
-                st.error(f"Login failed: {error}")
+            except Exception:
+                st.error("Email ya password check karein.")
 
 
-# RESTORE LOGIN SESSION
-if (
-    st.session_state.access_token
-    and st.session_state.refresh_token
-):
-    try:
-        supabase.auth.set_session(
-            st.session_state.access_token,
-            st.session_state.refresh_token
-        )
-
-        st.session_state.logged_in = True
-
-    except Exception:
-        clear_login()
-
-
+# SHOW LOGIN IF NOT LOGGED IN
 if not st.session_state.logged_in:
     login()
     st.stop()
@@ -292,6 +340,9 @@ with st.sidebar:
             supabase.auth.sign_out()
         except Exception:
             pass
+
+        cookies["refresh_token"] = ""
+        cookies.save()
 
         clear_login()
         st.rerun()
