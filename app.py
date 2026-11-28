@@ -1,4 +1,5 @@
 import streamlit as st
+import time
 from google import genai
 from pypdf import PdfReader
 from docx import Document
@@ -26,7 +27,6 @@ def read_document(file):
 
     if file.name.endswith(".pdf"):
         pdf = PdfReader(file)
-
         for i, page in enumerate(pdf.pages):
             pages.append({
                 "text": page.extract_text() or "",
@@ -37,20 +37,14 @@ def read_document(file):
         text = file.read().decode(
             "utf-8", errors="ignore"
         )
-        pages.append({
-            "text": text,
-            "page": 1
-        })
+        pages.append({"text": text, "page": 1})
 
     elif file.name.endswith(".docx"):
         doc = Document(file)
         text = "\n".join(
             p.text for p in doc.paragraphs
         )
-        pages.append({
-            "text": text,
-            "page": 1
-        })
+        pages.append({"text": text, "page": 1})
 
     return pages
 
@@ -104,12 +98,41 @@ QUESTION:
 {question}
 """
 
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=prompt
-    )
+    delays = [2, 5, 10]
 
-    return response.text
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.8-flash",
+                contents=prompt
+            )
+            return response.text
+
+        except Exception as e:
+            error_text = str(e).upper()
+
+            temporary_error = any(
+                word in error_text
+                for word in [
+                    "503",
+                    "UNAVAILABLE",
+                    "429",
+                    "RESOURCE_EXHAUSTED",
+                    "OVERLOADED"
+                ]
+            )
+
+            if temporary_error and attempt < 2:
+                time.sleep(delays[attempt])
+                continue
+
+            if temporary_error:
+                raise RuntimeError(
+                    "Gemini server abhi busy hai. "
+                    "Kuch der baad dobara try karein."
+                )
+
+            raise
 
 
 st.subheader("Upload Your Document")
@@ -162,16 +185,12 @@ if uploaded_file:
                 })
 
             except Exception as e:
-                st.error(
-                    "Answer generate nahi hua. "
-                    "API settings check karein."
-                )
-                st.caption(str(e))
+                st.error(str(e))
+
         else:
             st.warning("Please enter a question.")
 
     st.divider()
-
     st.subheader("Relevant Information")
 
     search_query = st.text_input(
@@ -193,7 +212,6 @@ if uploaded_file:
                 st.info("No matching information found.")
 
     st.divider()
-
     st.subheader("Summarize Document")
 
     if st.button("Summarize Document"):
@@ -205,12 +223,11 @@ if uploaded_file:
                     language
                 )
             st.write(summary)
+
         except Exception as e:
-            st.error("Summary generate nahi hua.")
-            st.caption(str(e))
+            st.error(str(e))
 
     st.divider()
-
     st.subheader("Sentiment Analysis")
 
     if st.button("Analyze Sentiment"):
@@ -244,7 +261,6 @@ if uploaded_file:
             st.write("Sentiment: Neutral")
 
     st.divider()
-
     st.subheader("Intent Analysis")
 
     if st.button("Analyze Intent"):
@@ -264,14 +280,12 @@ if uploaded_file:
             st.write("Intent: General Information")
 
     st.divider()
-
     st.subheader("Source Citations")
     st.write(
         "Source page references are included in AI answers."
     )
 
     st.divider()
-
     st.subheader("Chat History")
 
     if st.session_state.chat_history:
