@@ -64,8 +64,8 @@ def login():
 
             st.rerun()
 
-        except Exception:
-            st.error("Login failed. Email ya password check karein.")
+        except Exception as e:
+            st.error(f"Login failed:{e}")
 
 
 if not st.session_state.logged_in:
