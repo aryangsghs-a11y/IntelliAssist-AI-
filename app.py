@@ -5,8 +5,6 @@ from supabase import create_client
 from pypdf import PdfReader
 from docx import Document
 from io import BytesIO
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 st.set_page_config(
     page_title="IntelliAssist AI",
@@ -14,120 +12,85 @@ st.set_page_config(
     layout="wide"
 )
 
-# CONNECTIONS
-try:
-    supabase = create_client(
-        st.secrets["SUPABASE_URL"],
-        st.secrets["SUPABASE_KEY"]
-    )
+supabase = create_client(
+    st.secrets["SUPABASE_URL"],
+    st.secrets["SUPABASE_KEY"]
+)
 
-    gemini = genai.Client(
-        api_key=st.secrets["GEMINI_API_KEY"]
-    )
-
-except Exception as error:
-    st.error(f"Connection error: {error}")
-    st.stop()
+gemini = genai.Client(
+    api_key=st.secrets["GEMINI_API_KEY"]
+)
 
 MODEL = "gemini-3.5-flash-lite"
 
-# SESSION STATE
-defaults = {
-    "access_token": None,
-    "refresh_token": None,
-    "user_id": None,
-    "logged_in": False,
-    "document_text": "",
-    "pages": [],
-    "chat_history": []
-}
+LANGUAGES = [
+    "Auto",
+    "Hindi",
+    "English",
+    "Punjabi",
+    "Urdu",
+    "Bengali",
+    "Tamil",
+    "Telugu",
+    "Marathi",
+    "Gujarati"
+]
 
-for key, value in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
-
-
-def clear_login():
+if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-    st.session_state.access_token = None
-    st.session_state.refresh_token = None
-    st.session_state.user_id = None
+
+if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+
+if "document_text" not in st.session_state:
+    st.session_state.document_text = ""
+
+if "pages" not in st.session_state:
+    st.session_state.pages = []
 
 
 # LOGIN
-def login():
+if not st.session_state.logged_in:
     st.title("🤖 IntelliAssist AI")
     st.subheader("Login to your account")
 
     with st.form("login_form"):
         email = st.text_input("Email Address")
-        password = st.text_input(
-            "Password",
-            type="password"
-        )
-
-        submitted = st.form_submit_button(
+        password = st.text_input("Password", type="password")
+        login_button = st.form_submit_button(
             "Login",
             use_container_width=True
         )
 
-    if submitted:
-        if not email.strip() or not password:
-            st.warning("Email and password are required.")
+    if login_button:
+        try:
+            result = supabase.auth.sign_in_with_password({
+                "email": email,
+                "password": password
+            })
 
-        else:
-            try:
-                result = supabase.auth.sign_in_with_password({
-                    "email": email.strip(),
-                    "password": password
-                })
+            st.session_state.logged_in = True
+            st.session_state.access_token = result.session.access_token
+            st.session_state.refresh_token = result.session.refresh_token
+            st.session_state.user_id = result.user.id
 
-                if not result.session or not result.user:
-                    st.error("Login session could not be created.")
-                    return
+            st.rerun()
 
-                st.session_state.access_token = (
-                    result.session.access_token
-                )
+        except Exception:
+            st.error("Login failed. Email ya password check karein.")
 
-                st.session_state.refresh_token = (
-                    result.session.refresh_token
-                )
-
-                st.session_state.user_id = str(
-                    result.user.id
-                )
-
-                st.session_state.logged_in = True
-
-                st.success("Login successful!")
-                st.rerun()
-
-            except Exception as error:
-                st.error(f"Login failed: {error}")
-
-
-# RESTORE LOGIN SESSION
-if (
-    st.session_state.access_token
-    and st.session_state.refresh_token
-):
-    try:
-        supabase.auth.set_session(
-            st.session_state.access_token,
-            st.session_state.refresh_token
-        )
-
-        st.session_state.logged_in = True
-
-    except Exception:
-        clear_login()
-
-
-if not st.session_state.logged_in:
-    login()
     st.stop()
+
+
+# RESTORE SESSION
+try:
+    supabase.auth.set_session(
+        st.session_state.access_token,
+        st.session_state.refresh_token
+    )
+except Exception:
+    st.session_state.logged_in = False
+    st.rerun()
 
 
 # DOCUMENT READER
@@ -135,117 +98,56 @@ def read_document(file):
     text = ""
     pages = []
 
-    filename = file.name.lower()
-
-    if filename.endswith(".pdf"):
+    if file.name.lower().endswith(".pdf"):
         reader = PdfReader(BytesIO(file.read()))
 
         for number, page in enumerate(reader.pages, 1):
             content = page.extract_text() or ""
-
-            pages.append({
-                "page": number,
-                "text": content
-            })
-
+            pages.append(content)
             text += f"\n[PAGE {number}]\n{content}"
 
-    elif filename.endswith(".txt"):
-        text = file.read().decode(
-            "utf-8",
-            errors="ignore"
-        )
+    elif file.name.lower().endswith(".txt"):
+        text = file.read().decode("utf-8", errors="ignore")
+        pages = [text]
 
-        pages.append({
-            "page": 1,
-            "text": text
-        })
-
-    elif filename.endswith(".docx"):
+    elif file.name.lower().endswith(".docx"):
         doc = Document(BytesIO(file.read()))
-
-        text = "\n".join(
-            paragraph.text
-            for paragraph in doc.paragraphs
-        )
-
-        pages.append({
-            "page": 1,
-            "text": text
-        })
+        text = "\n".join(p.text for p in doc.paragraphs)
+        pages = [text]
 
     return text, pages
 
 
-# GEMINI ANSWER
-def ask_gemini(question, document, language):
-    if language == "Hindi":
-        instruction = "Answer completely in simple Hindi."
-
-    elif language == "English":
-        instruction = "Answer completely in clear English."
-
-    else:
-        instruction = (
-            "Answer in the same language used in the user's question."
-        )
-
-    prompt = f"""
-You are IntelliAssist AI, a document assistant.
-
-Follow these rules:
-1. Read the document carefully.
-2. Answer using information from the document.
-3. Explain in simple language.
-4. Give examples when useful.
-5. Explain step by step when needed.
-6. Mention source page numbers when possible.
-7. Do not invent information.
-8. If the answer is not in the document, say so clearly.
-
-LANGUAGE:
-{instruction}
-
-DOCUMENT:
-{document[:100000]}
-
-QUESTION:
-{question}
-"""
-
-    delays = [2, 5, 10]
-
-    for attempt in range(3):
+# AI RESPONSE
+def ask_gemini(prompt):
+    for delay in [2, 5, 10]:
         try:
             response = gemini.models.generate_content(
                 model=MODEL,
                 contents=prompt
             )
-
-            if response.text:
-                return response.text
-
-            return "AI did not return an answer. Please try again."
+            return response.text
 
         except Exception as error:
-            message = str(error).upper()
+            message = str(error)
 
-            temporary = any(
-                code in message
-                for code in [
-                    "503",
-                    "UNAVAILABLE",
-                    "429",
-                    "RESOURCE_EXHAUSTED",
-                    "OVERLOADED"
-                ]
-            )
+            if any(code in message for code in [
+                "503", "UNAVAILABLE", "429",
+                "RESOURCE_EXHAUSTED", "OVERLOADED"
+            ]):
+                time.sleep(delay)
+            else:
+                raise error
 
-            if temporary and attempt < 2:
-                time.sleep(delays[attempt])
-                continue
+    return "AI service abhi busy hai. Thodi der baad try karein."
 
-            raise error
+
+# LANGUAGE INSTRUCTION
+def language_instruction(language):
+    if language == "Auto":
+        return "Answer in the same language as the user's question."
+
+    return f"Answer only in {language} language."
 
 
 # SAVE CHAT
@@ -257,7 +159,7 @@ def save_chat(question, answer):
     }).execute()
 
 
-# LOAD CHAT HISTORY
+# LOAD HISTORY
 def load_history():
     result = (
         supabase.table("chat_history")
@@ -276,30 +178,29 @@ st.title("🤖 IntelliAssist AI")
 st.write("Smart Document AI Assistant")
 
 with st.sidebar:
-    st.success("Logged in successfully")
-
-    st.caption(
-        "Your chat history is saved permanently."
-    )
+    st.success("Logged in")
+    st.caption("Your chats are saved in Supabase.")
 
     language = st.selectbox(
-        "Choose Answer Language",
-        ["Auto", "Hindi", "English"]
+        "🌐 Select Answer Language",
+        LANGUAGES
     )
 
     if st.button("Logout", use_container_width=True):
-        try:
-            supabase.auth.sign_out()
-        except Exception:
-            pass
+        supabase.auth.sign_out()
 
-        clear_login()
+        for key in [
+            "logged_in", "access_token",
+            "refresh_token", "user_id",
+            "chat_history", "document_text", "pages"
+        ]:
+            st.session_state.pop(key, None)
+
         st.rerun()
 
 
-# DOCUMENT UPLOAD
-st.divider()
-st.subheader("📄 Upload Your Document")
+# UPLOAD DOCUMENT
+st.subheader("📄 Upload Document")
 
 uploaded_file = st.file_uploader(
     "Upload PDF, TXT or DOCX",
@@ -310,58 +211,62 @@ if uploaded_file:
     try:
         text, pages = read_document(uploaded_file)
 
-        if not text.strip():
-            st.warning(
-                "No readable text found in this document."
-            )
+        st.session_state.document_text = text
+        st.session_state.pages = pages
 
-        else:
-            st.session_state.document_text = text
-            st.session_state.pages = pages
-
-            st.success("Document uploaded successfully!")
+        st.success("Document uploaded successfully!")
 
     except Exception as error:
         st.error(f"Document error: {error}")
 
 
 # ASK QUESTION
-st.divider()
 st.subheader("💬 Ask a Question")
 
-question = st.text_area(
-    "Write your question here",
-    placeholder="Ask anything about your document..."
-)
+question = st.text_area("Write your question here")
 
-if st.button("🤖 Get Answer"):
+if st.button("Get Answer"):
     if not st.session_state.document_text:
         st.warning("Please upload a document first.")
 
     elif not question.strip():
-        st.warning("Please enter your question.")
+        st.warning("Please enter a question.")
 
     else:
-        try:
-            with st.spinner("Generating answer..."):
-                answer = ask_gemini(
-                    question,
-                    st.session_state.document_text,
-                    language
-                )
+        prompt = f"""
+You are IntelliAssist AI.
 
-            save_chat(question, answer)
+{language_instruction(language)}
 
-            st.session_state.chat_history.append({
-                "question": question,
-                "answer": answer
-            })
+Explain in very simple language.
+Use step-by-step explanation and examples.
+Use document information only.
+Mention page numbers when possible.
+If answer is not in document, clearly say so.
 
-            st.subheader("Answer")
-            st.write(answer)
+DOCUMENT:
+{st.session_state.document_text[:100000]}
 
-        except Exception as error:
-            st.error(f"Answer error: {error}")
+QUESTION:
+{question}
+"""
+
+        with st.spinner("Generating answer..."):
+            try:
+                answer = ask_gemini(prompt)
+
+                save_chat(question, answer)
+
+                st.session_state.chat_history.append({
+                    "question": question,
+                    "answer": answer
+                })
+
+                st.subheader("Answer")
+                st.write(answer)
+
+            except Exception as error:
+                st.error(f"Error: {error}")
 
 
 # SUMMARY
@@ -373,29 +278,30 @@ if st.button("Generate Summary"):
         st.warning("Upload a document first.")
 
     else:
-        try:
-            with st.spinner("Creating summary..."):
-                summary = ask_gemini(
-                    "Summarize the complete document with important points.",
-                    st.session_state.document_text,
-                    language
-                )
+        prompt = f"""
+Summarize this document in simple language.
+{language_instruction(language)}
 
-            st.write(summary)
+DOCUMENT:
+{st.session_state.document_text[:100000]}
+"""
 
-        except Exception as error:
-            st.error(f"Summary error: {error}")
+        with st.spinner("Creating summary..."):
+            try:
+                summary = ask_gemini(prompt)
+                st.write(summary)
+
+            except Exception as error:
+                st.error(f"Error: {error}")
 
 
 # DOCUMENT SEARCH
 st.divider()
 st.subheader("🔍 Search in Document")
 
-search_word = st.text_input(
-    "Enter search word"
-)
+search_word = st.text_input("Enter search word")
 
-if st.button("Search Document"):
+if st.button("Search"):
     document = st.session_state.document_text
 
     if not document:
@@ -405,15 +311,7 @@ if st.button("Search Document"):
         st.warning("Enter a search word.")
 
     elif search_word.lower() in document.lower():
-        index = document.lower().find(
-            search_word.lower()
-        )
-
         st.success("Word found in document.")
-
-        st.write(
-            document[index:index + 1000]
-        )
 
     else:
         st.info("Word not found.")
@@ -429,15 +327,8 @@ sentiment_text = st.text_area(
 )
 
 if st.button("Analyze Sentiment"):
-    positive = [
-        "good", "great", "happy",
-        "excellent", "love", "success"
-    ]
-
-    negative = [
-        "bad", "sad", "poor",
-        "hate", "angry", "failure"
-    ]
+    positive = ["good", "great", "happy", "excellent", "love"]
+    negative = ["bad", "sad", "poor", "hate", "angry"]
 
     words = sentiment_text.lower().split()
 
@@ -461,9 +352,7 @@ if st.button("Analyze Sentiment"):
 st.divider()
 st.subheader("🎯 Intent Analysis")
 
-intent_text = st.text_input(
-    "Enter text for intent analysis"
-)
+intent_text = st.text_input("Enter text for intent analysis")
 
 if st.button("Analyze Intent"):
     if not intent_text.strip():
@@ -472,59 +361,55 @@ if st.button("Analyze Intent"):
     else:
         text = intent_text.lower()
 
-        if any(word in text for word in [
-            "buy", "purchase", "order"
-        ]):
+        if any(word in text for word in ["buy", "purchase", "order"]):
             st.write("Intent: Purchase")
 
-        elif any(word in text for word in [
-            "help", "support", "problem"
-        ]):
+        elif any(word in text for word in ["help", "support", "problem"]):
             st.write("Intent: Support")
 
-        elif any(word in text for word in [
-            "learn", "explain", "study"
-        ]):
+        elif any(word in text for word in ["learn", "explain", "study"]):
             st.write("Intent: Learning")
 
         else:
-            st.write("Intent: General Information")
+            st.write("Intent: General")
 
 
-# PERMANENT CHAT HISTORY
+# CHAT HISTORY
 st.divider()
 st.subheader("💬 Permanent Chat History")
 
-try:
-    history = load_history()
+if st.button("Refresh Chat History"):
+    try:
+        history = load_history()
 
-    if history:
-        history_text = ""
+        if not history:
+            st.info("No chat history available.")
 
         for item in history:
             with st.expander(item["question"]):
                 st.write(item["answer"])
 
-                if item.get("created_at"):
-                    st.caption(
-                        "Saved: " + str(item["created_at"])
-                    )
+    except Exception as error:
+        st.error(f"History error: {error}")
 
-            history_text += (
-                "Question: " + item["question"] + "\n"
-                + "Answer: " + item["answer"] + "\n\n"
-                + "-------------------------\n\n"
-            )
 
-        st.download_button(
-            "📥 Download Chat History",
-            history_text,
-            file_name="IntelliAssist_Chat_History.txt",
-            mime="text/plain"
+# DOWNLOAD HISTORY
+try:
+    history = load_history()
+    history_text = ""
+
+    for item in history:
+        history_text += (
+            "Question: " + item["question"] + "\n"
+            + "Answer: " + item["answer"] + "\n\n"
         )
 
-    else:
-        st.info("No chat history yet.")
+    st.download_button(
+        "Download Chat History",
+        history_text or "No chat history available.",
+        file_name="IntelliAssist_Chat_History.txt",
+        mime="text/plain"
+    )
 
 except Exception as error:
     st.error(f"History error: {error}")
